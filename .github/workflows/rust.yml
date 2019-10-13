@@ -9,6 +9,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v1
+      with:
+        toolchain: stable
+        override: true
     - name: Build
       run: cargo build --verbose
     - name: Run tests
