@@ -1,5 +1,5 @@
 use futures::Future;
-use middleman::Builder;
+use enande::Processor;
 
 mod common;
 
@@ -13,9 +13,9 @@ impl From<std::convert::Infallible> for Error {
     }
 }
 
-struct Processor;
+struct Simple;
 
-impl middleman::Processor for Processor {
+impl enande::Processor for Simple {
     type Item = String;
     type Error = Error;
     type ResultItem = String;
@@ -32,7 +32,7 @@ impl middleman::Processor for Processor {
 
 #[test]
 fn test_som_spammers() {
-    let mut b = Builder::<String, Error>::new();
+    let mut b = Simple::builder();
     let mut barrel = common::barrel();
 
 
@@ -43,7 +43,7 @@ fn test_som_spammers() {
 	b.add_stream(common::spammer(format!("Spammer #{}", i), 100));
     }
 
-    let fut = b.run(barrel.pipe(), Processor);
+    let fut = b.run(barrel.pipe(), Simple);
     let mut rt = tokio::runtime::current_thread::Runtime::new().expect("Creating runtime");
 
 
