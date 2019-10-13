@@ -1,6 +1,6 @@
 [package]
 name = "enande"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Niclas Rosengren <niclas.rosengren@gmail.com>"]
 edition = "2018"
 license = "MIT"
@@ -17,3 +17,4 @@ futures-preview = { version = "0.3.0-alpha.19", default-features = false, featur
 
 [dev-dependencies]
 tokio = "0.2.0-alpha.6"
+futures-preview = { version = "0.3.0-alpha.19", default-features = true }

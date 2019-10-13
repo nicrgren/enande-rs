@@ -1,5 +1,7 @@
 use futures::Future;
 use enande::Processor;
+use enande::ProcRes;
+use std::pin::Pin;
 
 mod common;
 
@@ -19,20 +21,26 @@ impl enande::Processor for Simple {
     type Item = String;
     type Error = Error;
     type ResultItem = String;
-    type ResultFuture = Box<dyn Future<Output = Result<Self::ResultItem, Self::Error>> + Unpin>;
 
 
-    fn process(&mut self, _: Self::Item) -> Self::ResultFuture {
-	let res = futures::future::ready(Ok("A String".to_owned()));
-	Box::new(res)
+    fn process(&mut self, _item: Self::Item) -> Pin<Box<dyn Future<Output = Result<ProcRes<Self::ResultItem>, Self::Error>> + '_>> {
+	use futures::FutureExt;
+	self.actual_process().boxed()
     }
 
     
 }
 
+impl Simple {
+
+    async fn actual_process(&mut self) -> Result<ProcRes<String>, Error> {
+	Ok(ProcRes::One("A String".to_owned()))
+    }
+}
+
 #[test]
 fn test_som_spammers() {
-    let mut b = Simple::builder();
+    let mut b = Simple::process_builder();
     let mut barrel = common::barrel();
 
 

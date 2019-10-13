@@ -5,31 +5,34 @@
 
 use futures::{Sink, stream::Stream, StreamExt, Future, SinkExt};
 use std::convert::TryFrom;
+use std::pin::Pin;
 
+pub enum ProcRes<I> {
+    None,
+    One(I),
+    Many(Vec<I>),
+}
 
 
 pub trait Processor
-where Self::ResultFuture: Future<Output = Result<Self::ResultItem, Self::Error>>,
-      Self::Error: 'static,
+where Self::Error: 'static,
       Self::Item: 'static,
-      Self: Sized,
+      Self: Unpin + Sized,
 {
     type Item;
     type Error;
     type ResultItem;
-    type ResultFuture;
 
-    fn process(&mut self, item: Self::Item) -> Self::ResultFuture;
+    fn process(&mut self, item: Self::Item) -> Pin<Box<dyn Future<Output = Result<ProcRes<Self::ResultItem>, Self::Error>> + '_>>;
 
 
-    fn stopped(self) {}
+    fn stopped(&mut self) {}
     fn stopped_with_error(_error: Self::Error) {}
-
     fn on_error(&mut self, _error: Self::Error) {}
 
 
-    fn builder() -> Builder<Self::Item, Self::Error> {
-	Builder::new()
+    fn process_builder() -> ProcessBuilder<Self::Item, Self::Error> {
+	ProcessBuilder::new()
     }
 
 }
@@ -81,6 +84,8 @@ where TStream: Stream<Item = Result<TItem, TError>> + Unpin,
     async fn run<P>(mut self, mut processor: P)
     where P: Processor<Item = TItem, Error = TError, ResultItem = TSinkItem>,
     {
+
+
 	loop {
 	    let incoming = match self.stream.next().await {
 		Some(Ok(incoming)) => incoming,
@@ -99,23 +104,41 @@ where TStream: Stream<Item = Result<TItem, TError>> + Unpin,
 		    
 	    };
 
-	    let outgoing = match processor.process(incoming).await {
-		Ok(outgoing) => outgoing,
+	    let proc_res = match processor.process(incoming).await {
+		Ok(proc_res) => proc_res,
 		Err(err) => {
 		    processor.on_error(err);
 		    continue;
 		}
 	    };
 
-	    if let Err(_failed) = self.sink.send(outgoing).await {
-		// @TODO: Maybe deliver this failed thing to the
-		// processor. Allow it to act on the failed item.
-		// for now, we just drop it and continue.
-		continue;
-	    }
 
-	    if let Err(err) = self.sink.flush().await {
-		processor.on_error(TError::from(err));
+	    match proc_res {
+		ProcRes::None => continue,
+
+
+		ProcRes::One(item) => {
+		    if let Err(_failed) = self.sink.send(item).await {
+			// @TODO: Maybe deliver this failed thing to the
+			// processor. Allow it to act on the failed item.
+			// for now, we just drop it and continue.
+			continue;
+		    }
+
+		    if let Err(err) = self.sink.flush().await {
+			processor.on_error(TError::from(err));
+		    }
+		}
+
+
+		ProcRes::Many(v) => {
+		    let mut st = futures::stream::iter(v.into_iter());
+		    if let Err(err) = self.sink.send_all(&mut st).await {
+			processor.on_error(TError::from(err))
+		    }
+		    
+		}
+		
 	    }
 	}
     }
@@ -124,7 +147,7 @@ where TStream: Stream<Item = Result<TItem, TError>> + Unpin,
     
 }
 
-pub struct Builder<TItem, TError>{
+pub struct ProcessBuilder<TItem, TError>{
     streams: Vec<Box<dyn Stream<Item = Result<TItem, TError>> + Unpin>>
 }
 
@@ -132,7 +155,7 @@ impl
     <TItem,
      TError>
 
-    Builder
+    ProcessBuilder
     <TItem,
      TError>
 
