@@ -7,23 +7,37 @@ use futures::{Sink, stream::Stream, StreamExt, Future, SinkExt};
 use std::convert::TryFrom;
 use std::pin::Pin;
 
-pub enum ProcRes<I> {
+pub enum ProcRes<T> {
     None,
-    One(I),
-    Many(Vec<I>),
+    One(T),
+    Many(Vec<T>),
+}
+
+impl<T> From<Option<T>> for ProcRes<T> {
+
+    fn from(opt: Option<T>) -> Self {
+	match opt {
+	    Some(v) => Self::One(v),
+	    None => Self::None,
+	}
+    }
 }
 
 
 pub trait Processor
-where Self::Error: 'static,
-      Self::Item: 'static,
-      Self: Unpin + Sized,
+where Self::Error: Send + 'static,
+      Self::Item: Send + 'static,
+      Self: Send + Unpin + Sized,
+      Self::ResultItem: Send,
 {
     type Item;
     type Error;
     type ResultItem;
 
-    fn process(&mut self, item: Self::Item) -> Pin<Box<dyn Future<Output = Result<ProcRes<Self::ResultItem>, Self::Error>> + '_>>;
+    fn process(
+	&mut self,
+	item: Self::Item
+    ) -> Pin<Box<dyn Future<Output = Result<ProcRes<Self::ResultItem>, Self::Error>> + Send + '_>>;
 
 
     fn stopped(&mut self) {}
@@ -69,8 +83,10 @@ impl
 
 where TStream: Stream<Item = Result<TItem, TError>> + Unpin,
       TSink: Sink<TSinkItem, Error = TSinkError> + Unpin,
-      TError: From<TSinkError> + 'static,
-      TItem: 'static,
+      TError: From<TSinkError> + Send + 'static,
+      TItem: Send + 'static,
+      TSinkItem: Send,
+
 {
 
     fn new(stream: TStream, sink: TSink) -> Self {
@@ -81,7 +97,7 @@ where TStream: Stream<Item = Result<TItem, TError>> + Unpin,
 	}
     }
 
-    async fn run<P>(mut self, mut processor: P)
+    async fn run<P>(mut self, mut processor: P) -> Result<(), ()>
     where P: Processor<Item = TItem, Error = TError, ResultItem = TSinkItem>,
     {
 
@@ -99,7 +115,7 @@ where TStream: Stream<Item = Result<TItem, TError>> + Unpin,
 
 		    println!("Stream empty, stopping");
 		    processor.stopped();
-		    return;
+		    return Ok(());
 		}
 		    
 	    };
@@ -141,6 +157,7 @@ where TStream: Stream<Item = Result<TItem, TError>> + Unpin,
 		
 	    }
 	}
+
     }
     
 
@@ -148,7 +165,7 @@ where TStream: Stream<Item = Result<TItem, TError>> + Unpin,
 }
 
 pub struct ProcessBuilder<TItem, TError>{
-    streams: Vec<Box<dyn Stream<Item = Result<TItem, TError>> + Unpin>>
+    streams: Vec<Box<dyn Stream<Item = Result<TItem, TError>> + Send + Unpin>>
 }
 
 impl
@@ -160,8 +177,8 @@ impl
      TError>
 
 where
-    TError: Sized + 'static,
-    TItem: Sized + 'static,
+    TError: Sized + Send + 'static,
+    TItem: Sized + Send + 'static,
 {
 
     pub fn new() -> Self {
@@ -172,7 +189,7 @@ where
     /// Adds another stream as an input source to this builder.
     pub fn add_stream<'a, TStream, TStreamItem>(&'a mut self, stream: TStream) -> &mut Self
     where
-	 TStream: Stream<Item = TStreamItem> + Unpin + 'static,
+	 TStream: Stream<Item = TStreamItem> + Send + Unpin + 'static,
 	 TStreamItem: Into<TItem>,
     {
 	self.streams.push(Box::new(stream.map(|item| Ok(item.into()))));
@@ -182,7 +199,7 @@ where
     /// Adds an input where the Item can be converted into our Item using `TryFrom`.
     pub fn add_try<'a, TStream, TStreamItem>(&'a mut self, stream: TStream) -> &mut Self
     where
-	 TStream: Stream<Item = TStreamItem> + Unpin + 'static,
+	 TStream: Stream<Item = TStreamItem> + Send + Unpin + 'static,
 	 TItem: TryFrom<TStreamItem, Error = TError>,
     {
 
@@ -193,33 +210,47 @@ where
 
 
     /// Adds an input that contains fails.
-    pub fn add_try_stream<'a, TStream, TStreamItem, TStreamError>(&'a mut self, stream: TStream) -> &mut Self
+    pub fn add_try_stream<'a, TStream, TStreamError>(&'a mut self, stream: TStream) -> &mut Self
     where
-	TStream: Stream<Item = Result<TStreamItem, TStreamError>> + Unpin + 'static,
+	TStream: Stream<Item = Result<TItem, TStreamError>> + Send + Unpin + 'static,
 	TStreamError: 'static,
-	TStreamItem: 'static,
-	TItem: TryFrom<TStreamItem, Error = TError>,
 	TError: From<TStreamError>,
     {
 	use futures::TryStreamExt;
 
 	let stream = stream
-	    .map_err(TError::from)
-	    .and_then(|stream_item| futures::future::ready(TItem::try_from(stream_item)));
+	    .map_err(TError::from);
 
 	self.streams.push(Box::new(stream));
 	self
     }
 
-    pub async fn run<TSink, TSinkError, TProcessor>(
-	&mut self,
+    pub fn run<TSink, TSinkError, TProcessor>(
+	self,
 	sink: TSink,
 	processor: TProcessor
-    )
+    ) -> impl Future<Output = Result<(), ()>> + Send
+    where
+	TProcessor: Processor<Item = TItem, Error = TError> + 'static,
+	TSink: Sink<TProcessor::ResultItem, Error = TSinkError> + Send + Unpin + 'static,
+	TSinkError: 'static,
+	TError: From<TSinkError> + Send + 'static
+    {
+	use futures::FutureExt;
+	self.run_impl(sink, processor).boxed()
+    }
+
+
+
+    pub async fn run_impl<TSink, TSinkError, TProcessor>(
+	mut self,
+	sink: TSink,
+	processor: TProcessor
+    ) -> Result<(), ()>
 	where
 	TProcessor: Processor<Item = TItem, Error = TError>,
 	TSink: Sink<TProcessor::ResultItem, Error = TSinkError> + Unpin,
-	TError: From<TSinkError>
+	TError: From<TSinkError> + Send + 'static
 
     {
 	let joined_streams = futures::stream::select_all(self.streams.drain(0..));

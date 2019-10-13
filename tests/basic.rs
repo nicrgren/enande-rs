@@ -23,7 +23,7 @@ impl enande::Processor for Simple {
     type ResultItem = String;
 
 
-    fn process(&mut self, _item: Self::Item) -> Pin<Box<dyn Future<Output = Result<ProcRes<Self::ResultItem>, Self::Error>> + '_>> {
+    fn process(&mut self, _item: Self::Item) -> Pin<Box<dyn Future<Output = Result<ProcRes<Self::ResultItem>, Self::Error>> + Send + '_>> {
 	use futures::FutureExt;
 	self.actual_process().boxed()
     }
@@ -43,10 +43,6 @@ fn test_som_spammers() {
     let mut b = Simple::process_builder();
     let mut barrel = common::barrel();
 
-
-    // Tried 1_000 different sources each sending 1_000 messages (10_000_000 msgs).
-    // Handled in 4.5s
-
     for i in 0..100 {
 	b.add_stream(common::spammer(format!("Spammer #{}", i), 100));
     }
@@ -55,7 +51,7 @@ fn test_som_spammers() {
     let mut rt = tokio::runtime::current_thread::Runtime::new().expect("Creating runtime");
 
 
-    rt.block_on(fut);
+    rt.block_on(fut).unwrap();
 
     assert_eq!(100*100, barrel.collect().len());
 }
