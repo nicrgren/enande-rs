@@ -225,24 +225,26 @@ where
 	self
     }
 
-    pub fn run<TSink, TSinkError, TProcessor>(
-	self,
-	sink: TSink,
-	processor: TProcessor
-    ) -> impl Future<Output = Result<(), ()>> + Send
-    where
-	TProcessor: Processor<Item = TItem, Error = TError> + 'static,
-	TSink: Sink<TProcessor::ResultItem, Error = TSinkError> + Send + Unpin + 'static,
-	TSinkError: 'static,
-	TError: From<TSinkError> + Send + 'static
-    {
-	use futures::FutureExt;
-	self.run_impl(sink, processor).boxed()
-    }
+
+    // this is used to test out the actual return type of the async function.
+    // pub fn run<TSink, TSinkError, TProcessor>(
+    // 	self,
+    // 	sink: TSink,
+    // 	processor: TProcessor
+    // ) -> impl Future<Output = Result<(), ()>> + Send
+    // where
+    // 	TProcessor: Processor<Item = TItem, Error = TError> + 'static,
+    // 	TSink: Sink<TProcessor::ResultItem, Error = TSinkError> + Send + Unpin + 'static,
+    // 	TSinkError: 'static,
+    // 	TError: From<TSinkError> + Send + 'static
+    // {
+    // 	use futures::FutureExt;
+    // 	self.run_impl(sink, processor).boxed()
+    // }
 
 
 
-    pub async fn run_impl<TSink, TSinkError, TProcessor>(
+    pub async fn run<TSink, TSinkError, TProcessor>(
 	mut self,
 	sink: TSink,
 	processor: TProcessor
