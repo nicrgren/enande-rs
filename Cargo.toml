@@ -1,16 +1,18 @@
 [package]
-name = "middleman"
+name = "enande"
 version = "0.1.0"
 authors = ["Niclas Rosengren <niclas.rosengren@gmail.com>"]
 edition = "2018"
+license = "MIT"
+description = """
+A library that makes it quicker to compose many different types of streams 
+into a single handler with a possible output.
+"""
+documentation = "https://docs.rs/enande"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 futures-preview = "0.3.0-alpha.19"
-warp = "0.1.20"
-
-
 
 
 [dev-dependencies]

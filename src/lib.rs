@@ -3,15 +3,15 @@
 //! where you have one ore more streams delivering data
 //! and then 0 or 1 sink that sends data out.
 
-use warp::ws2 as ws;
-use std::error::Error as StdError;
-use futures::{Sink, Stream, StreamExt, Future, SinkExt};
-use std::convert::{TryInto, TryFrom};
+use futures::{Sink, stream::Stream, StreamExt, Future, SinkExt};
+use std::convert::TryFrom;
 
 
 
 pub trait Processor
 where Self::ResultFuture: Future<Output = Result<Self::ResultItem, Self::Error>>,
+      Self::Error: 'static,
+      Self::Item: 'static,
       Self: Sized,
 {
     type Item;
@@ -27,6 +27,11 @@ where Self::ResultFuture: Future<Output = Result<Self::ResultItem, Self::Error>>
 
     fn on_error(&mut self, _error: Self::Error) {}
 
+
+    fn builder() -> Builder<Self::Item, Self::Error> {
+	Builder::new()
+    }
+
 }
 
 
@@ -34,8 +39,8 @@ pub struct Handle;
 
 
 struct Runner<TStream, TItem, TError, TSink, TSinkItem, TSinkError>
-where TStream: Stream<Item = Result<TItem, TError>> + Unpin + 'static,
-      TSink: Sink<TSinkItem, Error = TSinkError> + Unpin + 'static,
+where TStream: Stream<Item = Result<TItem, TError>> + Unpin,
+      TSink: Sink<TSinkItem, Error = TSinkError> + Unpin,
 {
     stream: TStream,
     sink: TSink,
@@ -59,9 +64,10 @@ impl
      TSinkItem,
      TSinkError>
 
-where TStream: Stream<Item = Result<TItem, TError>> + Unpin + 'static,
-      TSink: Sink<TSinkItem, Error = TSinkError> + Unpin + 'static,
-      TError: From<TSinkError>,
+where TStream: Stream<Item = Result<TItem, TError>> + Unpin,
+      TSink: Sink<TSinkItem, Error = TSinkError> + Unpin,
+      TError: From<TSinkError> + 'static,
+      TItem: 'static,
 {
 
     fn new(stream: TStream, sink: TSink) -> Self {
@@ -76,8 +82,6 @@ where TStream: Stream<Item = Result<TItem, TError>> + Unpin + 'static,
     where P: Processor<Item = TItem, Error = TError, ResultItem = TSinkItem>,
     {
 	loop {
-	    println!("Polling stream");
-
 	    let incoming = match self.stream.next().await {
 		Some(Ok(incoming)) => incoming,
 		Some(Err(err)) => {
@@ -124,8 +128,6 @@ pub struct Builder<TItem, TError>{
     streams: Vec<Box<dyn Stream<Item = Result<TItem, TError>> + Unpin>>
 }
 
-
-
 impl
     <TItem,
      TError>
@@ -135,15 +137,17 @@ impl
      TError>
 
 where
-    TError: 'static,
-    TItem: 'static,
+    TError: Sized + 'static,
+    TItem: Sized + 'static,
 {
 
     pub fn new() -> Self {
 	Self { streams: Vec::new() }
     }
 
-    pub fn add_stream<TStream, TStreamItem>(&mut self, stream: TStream) -> &mut Self
+
+    /// Adds another stream as an input source to this builder.
+    pub fn add_stream<'a, TStream, TStreamItem>(&'a mut self, stream: TStream) -> &mut Self
     where
 	 TStream: Stream<Item = TStreamItem> + Unpin + 'static,
 	 TStreamItem: Into<TItem>,
@@ -152,7 +156,37 @@ where
 	self
     }
 
+    /// Adds an input where the Item can be converted into our Item using `TryFrom`.
+    pub fn add_try<'a, TStream, TStreamItem>(&'a mut self, stream: TStream) -> &mut Self
+    where
+	 TStream: Stream<Item = TStreamItem> + Unpin + 'static,
+	 TItem: TryFrom<TStreamItem, Error = TError>,
+    {
 
+	let stream = stream.map(|stream_item| TItem::try_from(stream_item));
+	self.streams.push(Box::new(stream));
+	self
+    }
+
+
+    /// Adds an input that contains fails.
+    pub fn add_try_stream<'a, TStream, TStreamItem, TStreamError>(&'a mut self, stream: TStream) -> &mut Self
+    where
+	TStream: Stream<Item = Result<TStreamItem, TStreamError>> + Unpin + 'static,
+	TStreamError: 'static,
+	TStreamItem: 'static,
+	TItem: TryFrom<TStreamItem, Error = TError>,
+	TError: From<TStreamError>,
+    {
+	use futures::TryStreamExt;
+
+	let stream = stream
+	    .map_err(TError::from)
+	    .and_then(|stream_item| futures::future::ready(TItem::try_from(stream_item)));
+
+	self.streams.push(Box::new(stream));
+	self
+    }
 
     pub async fn run<TSink, TSinkError, TProcessor>(
 	&mut self,
@@ -161,7 +195,7 @@ where
     )
 	where
 	TProcessor: Processor<Item = TItem, Error = TError>,
-	TSink: Sink<TProcessor::ResultItem, Error = TSinkError> + Unpin + 'static,
+	TSink: Sink<TProcessor::ResultItem, Error = TSinkError> + Unpin,
 	TError: From<TSinkError>
 
     {

@@ -2,7 +2,11 @@ use std::{
     task::{Poll, Context},
     pin::Pin,
 };
-use futures::{Stream, Sink};
+use futures::{
+    Stream,
+    Sink,
+    channel::mpsc,
+};
 
 
 
@@ -13,26 +17,60 @@ pub fn spammer(tag: impl Into<String>, count: usize) -> impl Stream<Item = Strin
 pub fn barrel<I>() -> Barrel<I>
     where I: Unpin
 {
-    Barrel { things: Vec::new() }
+    Barrel::new()
 }
+
 
 impl<I> Barrel<I>
     where I: Unpin
 {
-    pub fn collected(self) -> Vec<I> {
-	self.things
+
+    pub fn new() -> Self {
+	let (tx, rx) = mpsc::unbounded();
+	Self {
+	    things: rx,
+	    handle: tx,
+	}
+    }
+
+    pub fn collect(&mut self) -> Vec<I> {
+	let mut res = Vec::new();
+
+	while let Ok(Some(item)) = self.things.try_next() {
+	    res.push(item);
+	}
+
+	res
+
+    }
+
+    pub fn pipe(&self) -> Pipe<I> {
+	Pipe {
+	    tx: self.handle.clone(),
+	}
+	
     }
 }
-
 
 
 pub struct Barrel<I>
     where I: Unpin
 {
-    things: Vec<I>,
-} 
+    things: mpsc::UnboundedReceiver<I>,
+    handle: mpsc::UnboundedSender<I>,
+}
 
-impl<I> Sink<I> for Barrel<I>
+
+
+pub struct Pipe<I>
+{
+    tx: mpsc::UnboundedSender<I>,
+}
+
+
+
+
+impl<I> Sink<I> for Pipe<I>
     where I: Unpin
 {
 
@@ -46,8 +84,8 @@ impl<I> Sink<I> for Barrel<I>
 	Poll::Ready(Ok(()))
     }
 
-    fn start_send(self: Pin<&mut Self>, item: I) -> Result<(), Self::Error> {
-	self.get_mut().things.push(item);
+    fn start_send(mut self: Pin<&mut Self>, item: I) -> Result<(), Self::Error> {
+	self.as_mut().tx.unbounded_send(item).unwrap();
 	Ok(())
     }
 
@@ -101,8 +139,6 @@ impl Stream for Spammer {
 
 	self.count -= 1;
 
-
-	println!("Spammer polled");
 	let number = std::time::SystemTime::now()
 	    .duration_since(std::time::UNIX_EPOCH)
 	    .map(|d| d.as_micros())

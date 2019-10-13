@@ -3,8 +3,8 @@ use middleman::Builder;
 
 mod common;
 
-struct Error {
-    message: String,
+pub struct Error {
+    pub message: String,
 }
 
 impl From<std::convert::Infallible> for Error {
@@ -22,8 +22,7 @@ impl middleman::Processor for Processor {
     type ResultFuture = Box<dyn Future<Output = Result<Self::ResultItem, Self::Error>> + Unpin>;
 
 
-    fn process(&mut self, item: Self::Item) -> Self::ResultFuture {
-	println!("Processing: {}", item);
+    fn process(&mut self, _: Self::Item) -> Self::ResultFuture {
 	let res = futures::future::ready(Ok("A String".to_owned()));
 	Box::new(res)
     }
@@ -32,22 +31,25 @@ impl middleman::Processor for Processor {
 }
 
 #[test]
-fn fail() {
+fn test_som_spammers() {
     let mut b = Builder::<String, Error>::new();
-    let barrel = common::barrel();
-    let fut = 
-	b
-	.add_stream(common::spammer("Spammer #1", 100))
-	.add_stream(common::spammer("Spammer #2", 100))
-	.add_stream(common::spammer("Spammer #3", 100))
-	.add_stream(common::spammer("Spammer #4", 100))
-	.add_stream(common::spammer("Spammer #5", 100))
-	.run(barrel, Processor);
+    let mut barrel = common::barrel();
 
+
+    // Tried 1_000 different sources each sending 1_000 messages (10_000_000 msgs).
+    // Handled in 4.5s
+
+    for i in 0..100 {
+	b.add_stream(common::spammer(format!("Spammer #{}", i), 100));
+    }
+
+    let fut = b.run(barrel.pipe(), Processor);
     let mut rt = tokio::runtime::current_thread::Runtime::new().expect("Creating runtime");
+
 
     rt.block_on(fut);
 
+    assert_eq!(100*100, barrel.collect().len());
 }
 
 
