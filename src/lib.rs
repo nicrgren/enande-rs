@@ -7,6 +7,9 @@ use futures::{Sink, stream::Stream, StreamExt, Future, SinkExt};
 use std::convert::TryFrom;
 use std::pin::Pin;
 
+pub type GenFut<'a, T> =
+    Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
 pub enum ProcRes<T> {
     None,
     One(T),
@@ -37,13 +40,12 @@ where Self::Error: Send + 'static,
     fn process(
 	&mut self,
 	item: Self::Item
-    ) -> Pin<Box<dyn Future<Output = Result<ProcRes<Self::ResultItem>, Self::Error>> + Send + '_>>;
+    ) -> GenFut<'_, Result<ProcRes<Self::ResultItem>, Self::Error>>;
 
 
-    fn stopped(&mut self) {}
-    fn stopped_with_error(_error: Self::Error) {}
-    fn on_error(&mut self, _error: Self::Error) {}
+    fn stopped(&mut self, _: Option<Self::Error>) -> GenFut<'_, ()> { Box::pin(futures::future::ready(())) }
 
+    fn on_error(&mut self, _error: Self::Error) -> GenFut<'_, ()> { Box::pin(futures::future::ready(())) }
 
     fn process_builder() -> ProcessBuilder<Self::Item, Self::Error> {
 	ProcessBuilder::new()
@@ -107,14 +109,14 @@ where TStream: Stream<Item = Result<TItem, TError>> + Unpin,
 		Some(Ok(incoming)) => incoming,
 		Some(Err(err)) => {
 		    // Add ability for Processor to STOP here by returning a value.
-		    processor.on_error(err);
+		    processor.on_error(err).await;
 		    continue;
 		},
 
 		None => {
 
 		    println!("Stream empty, stopping");
-		    processor.stopped();
+		    processor.stopped(None).await;
 		    return Ok(());
 		}
 		    
@@ -123,7 +125,7 @@ where TStream: Stream<Item = Result<TItem, TError>> + Unpin,
 	    let proc_res = match processor.process(incoming).await {
 		Ok(proc_res) => proc_res,
 		Err(err) => {
-		    processor.on_error(err);
+		    processor.on_error(err).await;
 		    continue;
 		}
 	    };
@@ -150,7 +152,7 @@ where TStream: Stream<Item = Result<TItem, TError>> + Unpin,
 		ProcRes::Many(v) => {
 		    let mut st = futures::stream::iter(v.into_iter());
 		    if let Err(err) = self.sink.send_all(&mut st).await {
-			processor.on_error(TError::from(err))
+			processor.on_error(TError::from(err)).await;
 		    }
 		    
 		}
